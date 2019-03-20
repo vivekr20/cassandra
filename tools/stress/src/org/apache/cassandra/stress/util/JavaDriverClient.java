@@ -23,8 +23,11 @@ import java.util.concurrent.ConcurrentMap;
 import javax.net.ssl.SSLContext;
 
 import com.datastax.driver.core.*;
+import com.datastax.driver.core.exceptions.DriverException;
+import com.datastax.driver.core.exceptions.OverloadedException;
 import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
 import com.datastax.driver.core.policies.LoadBalancingPolicy;
+import com.datastax.driver.core.policies.RetryPolicy;
 import com.datastax.driver.core.policies.TokenAwarePolicy;
 import com.datastax.driver.core.policies.WhiteListPolicy;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -132,6 +135,7 @@ public class JavaDriverClient
                                                 .withPort(port)
                                                 .withPoolingOptions(poolingOpts)
                                                 .withoutJMXReporting()
+                                                .withRetryPolicy(new CustomRetryPolicy())
                                                 .withProtocolVersion(protocolVersion)
                                                 .withoutMetrics(); // The driver uses metrics 3 with conflict with our version
         if (loadBalancingPolicy != null)
@@ -156,6 +160,7 @@ public class JavaDriverClient
             clusterBuilder.withCredentials(username, password);
         }
 
+        clusterBuilder.withRetryPolicy(new CustomRetryPolicy());
         cluster = clusterBuilder.build();
         Metadata metadata = cluster.getMetadata();
         System.out.printf(
@@ -203,7 +208,9 @@ public class JavaDriverClient
         {
             stmt.setConsistencyLevel(from(consistency));
         }
+
         BoundStatement bstmt = stmt.bind((Object[]) queryParams.toArray(new Object[queryParams.size()]));
+        bstmt.setIdempotent(true);
         return getSession().execute(bstmt);
     }
 
@@ -247,5 +254,71 @@ public class JavaDriverClient
     public void disconnect()
     {
         cluster.close();
+    }
+    
+    private class CustomRetryPolicy implements RetryPolicy
+    {
+
+		@Override
+		public void close() {
+		}
+
+		@Override
+		public void init(Cluster arg0) {
+		}
+
+		@Override
+		public RetryDecision onReadTimeout(Statement arg0, ConsistencyLevel arg1, int arg2, int arg3, boolean arg4,
+				int arg5) {
+			// TODO Auto-generated method stub
+			return RetryDecision.rethrow();
+		}
+
+		@Override
+		public RetryDecision onRequestError(Statement arg0, ConsistencyLevel arg1, DriverException arg2, int retryNumber) {
+			RetryDecision retryDecision;
+
+            System.out.printf("Got error exception %s", arg2.toString());
+	        try {
+	            if (arg2 instanceof OverloadedException) {
+	                retryDecision = retryManyTimesWithBackOffOrThrow(retryNumber, arg1);
+	            } else {
+	                retryDecision = RetryDecision.rethrow();
+	            }
+	        } catch (InterruptedException exception) {
+	            retryDecision = RetryDecision.rethrow();
+	        }
+
+	        return retryDecision;
+		}
+
+		@Override
+		public RetryDecision onUnavailable(Statement arg0, ConsistencyLevel arg1, int arg2, int arg3, int arg4) {
+			// TODO Auto-generated method stub
+			return RetryDecision.rethrow();
+		}
+
+		@Override
+		public RetryDecision onWriteTimeout(Statement arg0, ConsistencyLevel arg1, WriteType arg2, int arg3, int arg4,
+				int arg5) {
+			// TODO Auto-generated method stub
+			return RetryDecision.rethrow();
+		}
+		
+		private RetryDecision retryManyTimesWithBackOffOrThrow(int retryNumber, ConsistencyLevel cl) throws InterruptedException {
+
+	        RetryDecision retryDecision = null;
+
+            if (retryNumber < 10) {
+                Thread.sleep(250 * retryNumber);
+                System.out.printf("Retrying attempt: %n", retryNumber);
+                retryDecision = RetryDecision.retry(cl);
+            } else {
+                retryDecision = RetryDecision.rethrow();
+            }
+
+	        return retryDecision;
+	    }
+    	
     }
 }
