@@ -20,6 +20,9 @@ package org.apache.cassandra.stress.util;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import javax.net.ssl.SSLContext;
 
 import com.datastax.driver.core.*;
@@ -281,7 +284,17 @@ public class JavaDriverClient
             System.out.printf("Got error exception %s", arg2.toString());
 	        try {
 	            if (arg2 instanceof OverloadedException) {
-	                retryDecision = retryManyTimesWithBackOffOrThrow(retryNumber, arg1);
+	            	String exceptionMessage = arg2.getMessage();
+	            	Pattern pattern = Pattern.compile(".*RetryAfterMs=([\\d+|\\.]+),.*");
+	            	Matcher matcher = pattern.matcher(exceptionMessage);
+	            	double retryAfterMilliseconds = -1;
+	            	if (matcher.matches())
+	            	{
+	            		String matchedGroup = matcher.group(1);
+	            		retryAfterMilliseconds = Double.parseDouble(matchedGroup);
+	            	}
+	            	
+	                retryDecision = retryManyTimesWithBackOffOrThrow(retryNumber, arg1, retryAfterMilliseconds);
 	            } else {
 	                retryDecision = RetryDecision.rethrow();
 	            }
@@ -305,12 +318,18 @@ public class JavaDriverClient
 			return RetryDecision.rethrow();
 		}
 		
-		private RetryDecision retryManyTimesWithBackOffOrThrow(int retryNumber, ConsistencyLevel cl) throws InterruptedException {
+		private RetryDecision retryManyTimesWithBackOffOrThrow(int retryNumber, ConsistencyLevel cl, double retryAfterMilliseconds) throws InterruptedException {
 
 	        RetryDecision retryDecision = null;
 
             if (retryNumber < 10) {
-                Thread.sleep(250 * retryNumber);
+            	long retryAfterInterval = 250 * retryNumber;
+            	if (retryAfterMilliseconds > 0)
+            	{
+            		retryAfterInterval = (long)retryAfterMilliseconds;
+            	}
+            	
+                Thread.sleep(retryAfterInterval);
                 System.out.printf("Retrying attempt: %n", retryNumber);
                 retryDecision = RetryDecision.retry(cl);
             } else {
