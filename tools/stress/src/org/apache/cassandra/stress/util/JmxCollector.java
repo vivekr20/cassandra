@@ -82,8 +82,8 @@ public class JmxCollector implements Callable<JmxCollector.GcStats>
         int i = 0;
         for (String host : hosts)
         {
-            probes[i] = connect(host, port);
-            probes[i].getAndResetGCStats();
+            //probes[i] = connect(host, port);
+            //probes[i].getAndResetGCStats();
             i++;
         }
     }
